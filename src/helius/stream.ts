@@ -104,17 +104,17 @@ export class HeliusDexStream {
 
         if (msg.method === "logsNotification") {
           const params = msg.params as Record<string, unknown> | undefined;
+          const subscriptionId = params?.subscription as number;
           const value = params?.result as Record<string, unknown> | undefined;
           const signature = value?.signature as string;
           const logs = value?.logs as string[];
           if (!signature || !Array.isArray(logs)) return;
-          const text = logs.join(" ");
-          for (const [label, programId] of Object.entries(DEX_PROGRAM_IDS)) {
-            if (text.includes(programId)) {
-              this.onActivity({ programLabel: label, programId, signature, logs });
-              break;
-            }
-          }
+          // Use subscription label for deterministic DEX identification
+          // instead of text-matching logs (which is ambiguous when a tx
+          // touches multiple DEX programs).
+          const label = this.subToLabel.get(subscriptionId) ?? "unknown";
+          const programId = label.startsWith("account:") ? label.slice(8) : label;
+          this.onActivity({ programLabel: label, programId, signature, logs });
         }
       } catch (error) {
         log.warn({ error: String(error) }, "Invalid Helius WS message");

@@ -129,6 +129,9 @@ export async function buildArbitrage(
   // Final assembly: computeBudget → borrow → coreInstructions → tip → repay
 
   // Add swap instructions from each leg
+  // Order per Jupiter docs: setup → swap → cleanup → otherInstructions
+  // Our final assembly: computeBudget → borrow → [setup → swap → cleanup → other] → tip → repay
+  // This preserves Jupiter's intended instruction sequence within coreInstructions.
   for (let i = 0; i < opportunity.legs.length; i++) {
     const leg = opportunity.legs[i]!;
     const includeCleanup = i === opportunity.legs.length - 1;

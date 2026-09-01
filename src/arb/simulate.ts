@@ -14,6 +14,7 @@ import {
   buildArbitrage,
   buildVersionedTransaction,
   selectTipAccount,
+  tipForProfit,
 } from "./builder";
 import {
   estimatePriorityFee,
@@ -198,6 +199,12 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
 
     const baseInputUsd = inputUsd(simOpp, profitMint);
 
+    // Flash-loan fee in USD (Jupiter Lend currently charges zero fees, but this
+    // ensures the cost model is correct if fees are added in the future).
+    const flashLoanFeeUsd = built.flashLoan
+      ? (Number(built.flashLoan.feeAmount) / 10 ** profitMint.decimals) * profitMint.price
+      : 0;
+
     // ── Stage 1: CU estimate without tip ────────────────────────────────
     // Purpose: measure execution cost of the core arbitrage logic.
     // This is NOT the final transaction — it omits the tip instruction.
@@ -256,13 +263,10 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
 
     // ── Tip estimation ──────────────────────────────────────────────────
     const solPriceUsd = sol.price;
-    const profitLamports = simOpp.profitUsd / solPriceUsd * 1e9;
-    const minTip = env.SENDER_MODE === "swqos" ? 5_000 : Math.max(1_000_000, env.MIN_SENDER_TIP_LAMPORTS);
-    const tipFromProfit = Math.round(profitLamports * (env.MAX_TIP_PROFIT_PCT / 100));
-    const tipLamports = Math.max(minTip, Math.min(env.MAX_SENDER_TIP_LAMPORTS, tipFromProfit));
+    const tipLamports = tipForProfit(simOpp.profitUsd, solPriceUsd);
 
     const totalCostLamports = priorityFeeLamports + baseFeeLamports + tipLamports;
-    const totalCostUsd = (totalCostLamports / 1e9) * solPriceUsd;
+    const totalCostUsd = (totalCostLamports / 1e9) * solPriceUsd + flashLoanFeeUsd;
     const grossUsd = simOpp.profitUsd;
     const netUsd = grossUsd - totalCostUsd;
     const netBps = baseInputUsd > 0 ? (netUsd / baseInputUsd) * 10_000 : 0;

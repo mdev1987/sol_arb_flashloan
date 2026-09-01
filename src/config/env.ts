@@ -38,7 +38,7 @@ const envSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
   WATCH_ACCOUNTS: z.string().default(""),
-  JUPITER_RATE_LIMIT_RPS: z.coerce.number().positive().default(1),
+  JUPITER_RATE_LIMIT_RPS: z.coerce.number().positive().default(3),
   DEX_PAIRS: z.string().default(""),
   BOT_TOKEN: z.string().default(""),
   CHAT_ID: z.string().default(""),

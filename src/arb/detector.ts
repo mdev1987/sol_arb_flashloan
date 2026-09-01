@@ -162,61 +162,59 @@ async function checkRoundTrip(
 
 // ── Main scan ────────────────────────────────────────────────────────────────
 
+async function scanPair(
+  dexA: string[],
+  dexB: string[],
+  amount: bigint,
+  taker: string,
+): Promise<ArbOpportunity | null> {
+  try {
+    const leg1 = await getLeg(USDC_MINT_STR, SOL_MINT_STR, amount, taker, dexA);
+    if (!leg1) return null;
+    if (!routeUsesOnly(leg1.build, dexA)) return null;
+    const leg2 = await getLeg(SOL_MINT_STR, USDC_MINT_STR, leg1.outputAmount, taker, dexB);
+    if (!leg2) return null;
+    if (!routeUsesOnly(leg2.build, dexB)) return null;
+    return await makeOpportunity([leg1, leg2]);
+  } catch {
+    return null;
+  }
+}
+
 export async function scanOnce(taker: string): Promise<ArbOpportunity[]> {
   const found: ArbOpportunity[] = [];
   const scanStart = Date.now();
 
-  const amounts = [
-    BigInt(Math.round(env.MAX_TRADE_USDC * 1_000_000)),
-  ];
+  const amount = BigInt(Math.round(env.MAX_TRADE_USDC * 1_000_000));
 
-  // If DEX_PAIRS is configured, scan those pairs
+  // Build pair list
+  const pairs: Array<[string[], string[]]> = [];
   if (env.DEX_PAIRS) {
-    const pairs = parseUserDexPairs();
-    const limited = pairs.slice(0, env.MAX_PAIRS_PER_SCAN);
-    for (const [dexA, dexB] of limited) {
-      for (const amount of amounts) {
-        try {
-          const leg1 = await getLeg(USDC_MINT_STR, SOL_MINT_STR, amount, taker, dexA);
-          if (!leg1) continue;
-          if (!routeUsesOnly(leg1.build, dexA)) continue;
-          const leg2 = await getLeg(SOL_MINT_STR, USDC_MINT_STR, leg1.outputAmount, taker, dexB);
-          if (!leg2) continue;
-          if (!routeUsesOnly(leg2.build, dexB)) continue;
-          const opp = await makeOpportunity([leg1, leg2]);
-          if (opp && opp.profitBps >= env.MIN_PROFIT_BPS && opp.profitUsd >= env.MIN_PROFIT_USDC) {
-            found.push(opp);
-          }
-        } catch (error) {
-          log.warn({ error: String(error).slice(0, 100) }, "DEX pair check failed");
-        }
-      }
-    }
+    const parsed = parseUserDexPairs();
+    pairs.push(...parsed.slice(0, env.MAX_PAIRS_PER_SCAN));
   } else {
     const limited = CROSS_DEX_PAIRS.slice(0, env.MAX_PAIRS_PER_SCAN);
     for (const [venueAKey, venueBKey] of limited) {
-      const dexA = [...VENUE_LABELS[venueAKey]];
-      const dexB = [...VENUE_LABELS[venueBKey]];
-      for (const amount of amounts) {
-        try {
-          const leg1 = await getLeg(USDC_MINT_STR, SOL_MINT_STR, amount, taker, dexA);
-          if (!leg1) continue;
-          if (!routeUsesOnly(leg1.build, dexA)) continue;
-          const leg2 = await getLeg(SOL_MINT_STR, USDC_MINT_STR, leg1.outputAmount, taker, dexB);
-          if (!leg2) continue;
-          if (!routeUsesOnly(leg2.build, dexB)) continue;
-          const opp = await makeOpportunity([leg1, leg2]);
-          if (opp && opp.profitBps >= env.MIN_PROFIT_BPS && opp.profitUsd >= env.MIN_PROFIT_USDC) {
-            found.push(opp);
-          }
-        } catch (error) {
-          log.debug({ venueA: venueAKey, venueB: venueBKey, error: String(error).slice(0, 80) }, "Pair check failed");
-        }
+      pairs.push([[...VENUE_LABELS[venueAKey]], [...VENUE_LABELS[venueBKey]]]);
+    }
+  }
+
+  // Scan pairs concurrently — the rate limiter serializes individual Jupiter
+  // requests, but overlapping network latency across pairs reduces total scan time.
+  const results = await Promise.allSettled(
+    pairs.map(([dexA, dexB]) => scanPair(dexA, dexB, amount, taker)),
+  );
+
+  for (const r of results) {
+    if (r.status === "fulfilled" && r.value) {
+      const opp = r.value;
+      if (opp.profitBps >= env.MIN_PROFIT_BPS && opp.profitUsd >= env.MIN_PROFIT_USDC) {
+        found.push(opp);
       }
     }
   }
 
   found.sort((a, b) => b.profitUsd - a.profitUsd);
-  log.debug({ pairs: Math.min(env.MAX_PAIRS_PER_SCAN, env.DEX_PAIRS ? parseUserDexPairs().length : CROSS_DEX_PAIRS.length), durationMs: Date.now() - scanStart, candidates: found.length }, "Scan complete");
+  log.debug({ pairs: pairs.length, durationMs: Date.now() - scanStart, candidates: found.length }, "Scan complete");
   return found;
 }
