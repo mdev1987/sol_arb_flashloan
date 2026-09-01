@@ -5,10 +5,11 @@ import {
   TransactionMessage,
   ComputeBudgetProgram,
 } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { env } from "../config/env";
 import { log } from "../utils/logger";
 import { getConnection, getKeypair } from "../helius/client";
-import type { ArbOpportunity, SimulationResult } from "../market/types";
+import type { ArbOpportunity, ArbLeg, SimulationResult } from "../market/types";
 import {
   buildArbitrage,
   buildVersionedTransaction,
@@ -19,9 +20,8 @@ import {
   feeFromCu,
   sizeOf,
 } from "./builder";
-import { getPricesUsd } from "../jupiter/client";
-
-const SOL_MINT_STR = "So11111111111111111111111111111111111111112";
+import { getBuild, routeDexes, getPricesUsd } from "../jupiter/client";
+import { SOL_MINT_STR, USDC_MINT_STR } from "../config/constants";
 
 // ── Single execution identity ────────────────────────────────────────────────
 // Always use the same keypair for simulation and transaction signing.
@@ -79,6 +79,54 @@ function failure(
   };
 }
 
+// ── Fresh builds pipeline ────────────────────────────────────────────────────
+// Re-fetches Jupiter /build for each leg using original parameters.
+// Ensures simulation is based on the freshest possible quotes, not stale
+// builds from detection (which can be seconds old).
+
+async function refetchLegs(legs: ArbLeg[], taker: string): Promise<ArbLeg[]> {
+  const refreshed: ArbLeg[] = [];
+  let currentAmount = legs[0]!.inputAmount;
+
+  for (const orig of legs) {
+    const isSolOutput = orig.outputMint === SOL_MINT_STR;
+    const destinationTokenAccount = isSolOutput
+      ? getAssociatedTokenAddressSync(new PublicKey(SOL_MINT_STR), new PublicKey(taker)).toBase58()
+      : undefined;
+
+    const build = await getBuild({
+      inputMint: orig.inputMint,
+      outputMint: orig.outputMint,
+      amount: currentAmount,
+      taker,
+      slippageBps: "rtse",
+      dexes: orig.constrainedDex,
+      maxAccounts: 64,
+      wrapAndUnwrapSol: false,
+      destinationTokenAccount,
+    });
+
+    if (!build) {
+      log.debug({ inputMint: orig.inputMint.slice(0, 8), outputMint: orig.outputMint.slice(0, 8) }, "Fresh build returned null — skipping");
+      return [];
+    }
+
+    refreshed.push({
+      build,
+      inputMint: orig.inputMint,
+      outputMint: orig.outputMint,
+      inputAmount: currentAmount,
+      outputAmount: BigInt(build.outAmount),
+      routeDexes: routeDexes(build),
+      constrainedDex: orig.constrainedDex,
+    });
+
+    currentAmount = BigInt(build.outAmount);
+  }
+
+  return refreshed;
+}
+
 // ── Main simulation pipeline ─────────────────────────────────────────────────
 
 export async function simulateOpportunity(opp: ArbOpportunity): Promise<SimulationResult> {
@@ -86,11 +134,18 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
   const payer = getSimulationPayer();
 
   try {
-    const built = await buildArbitrage(connection, opp, payer.publicKey);
-    const tipAccount = selectTipAccount(Number(opp.inputAmount % 1_000_000n));
+    // Re-fetch fresh builds for each leg before simulation.
+    // This ensures we simulate against current market state, not stale detection quotes.
+    const freshLegs = await refetchLegs(opp.legs, payer.publicKey.toBase58());
+    const simOpp = freshLegs.length === opp.legs.length
+      ? { ...opp, legs: freshLegs, detectedAt: Date.now() }
+      : opp;
+
+    const built = await buildArbitrage(connection, simOpp, payer.publicKey);
+    const tipAccount = selectTipAccount(Number(simOpp.inputAmount % 1_000_000n));
     const sol = await usdPrice(SOL_MINT_STR);
-    const profitMint = await usdPrice(opp.profitMint);
-    const baseInputUsd = inputUsd(opp, profitMint);
+    const profitMint = await usdPrice(simOpp.profitMint);
+    const baseInputUsd = inputUsd(simOpp, profitMint);
 
     // ── Stage 1: CU estimate without tip ────────────────────────────────
     // Purpose: measure execution cost of the core arbitrage logic.
@@ -120,13 +175,13 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
     });
     const roughCu = stage1Sim.value.unitsConsumed ?? 0;
     if (stage1Sim.value.err) {
-      return failure(opp, stage1Sim.value.logs ?? null, JSON.stringify(stage1Sim.value.err), roughCu, 0, 0, 0, 0, 0, 0, 0);
+      return failure(simOpp, stage1Sim.value.logs ?? null, JSON.stringify(stage1Sim.value.err), roughCu, 0, 0, 0, 0, 0, 0, 0);
     }
     if (roughCu <= 0) throw new Error("Simulation returned zero compute units");
 
     const computeUnitLimit = Math.ceil(roughCu * (1 + env.CU_MARGIN_BPS / 10_000));
     if (computeUnitLimit > env.MAX_COMPUTE_UNITS) {
-      return failure(opp, stage1Sim.value.logs ?? null, `compute limit ${computeUnitLimit} exceeds max ${env.MAX_COMPUTE_UNITS}`, roughCu, computeUnitLimit, 0, 0, 0, 0, baseInputUsd, 0);
+      return failure(simOpp, stage1Sim.value.logs ?? null, `compute limit ${computeUnitLimit} exceeds max ${env.MAX_COMPUTE_UNITS}`, roughCu, computeUnitLimit, 0, 0, 0, 0, baseInputUsd, 0);
     }
 
     // ── Priority fee from actual candidate TX ───────────────────────────
@@ -150,14 +205,14 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
 
     // ── Tip estimation ──────────────────────────────────────────────────
     const solPriceUsd = sol.price;
-    const profitLamports = opp.profitUsd / solPriceUsd * 1e9;
+    const profitLamports = simOpp.profitUsd / solPriceUsd * 1e9;
     const minTip = env.SENDER_MODE === "swqos" ? 5_000 : Math.max(1_000_000, env.MIN_SENDER_TIP_LAMPORTS);
     const tipFromProfit = Math.round(profitLamports * (env.MAX_TIP_PROFIT_PCT / 100));
     const tipLamports = Math.max(minTip, Math.min(env.MAX_SENDER_TIP_LAMPORTS, tipFromProfit));
 
     const totalCostLamports = priorityFeeLamports + baseFeeLamports + tipLamports;
     const totalCostUsd = (totalCostLamports / 1e9) * solPriceUsd;
-    const grossUsd = opp.profitUsd;
+    const grossUsd = simOpp.profitUsd;
     const netUsd = grossUsd - totalCostUsd;
     const netBps = baseInputUsd > 0 ? (netUsd / baseInputUsd) * 10_000 : 0;
 
@@ -180,7 +235,7 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
       tipAccount,
     );
     if (sizeOf(finalTx) > env.MAX_TX_BYTES) {
-      return failure(opp, stage1Sim.value.logs ?? null, `transaction is ${sizeOf(finalTx)} bytes (max ${env.MAX_TX_BYTES})`, roughCu, computeUnitLimit, priorityFeeMicroLamports, tipLamports, priorityFeeLamports, totalCostUsd, baseInputUsd, netBps, sizeOf(finalTx));
+      return failure(simOpp, stage1Sim.value.logs ?? null, `transaction is ${sizeOf(finalTx)} bytes (max ${env.MAX_TX_BYTES})`, roughCu, computeUnitLimit, priorityFeeMicroLamports, tipLamports, priorityFeeLamports, totalCostUsd, baseInputUsd, netBps, sizeOf(finalTx));
     }
     finalTx.sign([payer.signer]);
 
@@ -191,10 +246,10 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
     });
     const finalCu = stage2Sim.value.unitsConsumed ?? 0;
     if (stage2Sim.value.err) {
-      return failure(opp, stage2Sim.value.logs ?? null, JSON.stringify(stage2Sim.value.err), finalCu, computeUnitLimit, priorityFeeMicroLamports, tipLamports, priorityFeeLamports, totalCostUsd, baseInputUsd, netBps, sizeOf(finalTx));
+      return failure(simOpp, stage2Sim.value.logs ?? null, JSON.stringify(stage2Sim.value.err), finalCu, computeUnitLimit, priorityFeeMicroLamports, tipLamports, priorityFeeLamports, totalCostUsd, baseInputUsd, netBps, sizeOf(finalTx));
     }
     if (Math.ceil(finalCu * (1 + env.CU_MARGIN_BPS / 10_000)) > env.MAX_COMPUTE_UNITS) {
-      return failure(opp, stage2Sim.value.logs ?? null, `stage-2 CU ${finalCu} exceeds configured maximum`, finalCu, computeUnitLimit, priorityFeeMicroLamports, tipLamports, priorityFeeLamports, totalCostUsd, baseInputUsd, netBps, sizeOf(finalTx));
+      return failure(simOpp, stage2Sim.value.logs ?? null, `stage-2 CU ${finalCu} exceeds configured maximum`, finalCu, computeUnitLimit, priorityFeeMicroLamports, tipLamports, priorityFeeLamports, totalCostUsd, baseInputUsd, netBps, sizeOf(finalTx));
     }
 
     log.info(
@@ -213,7 +268,7 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
     );
 
     return {
-      opportunity: opp,
+      opportunity: simOpp,
       wouldSucceed: true,
       unitsConsumed: finalCu,
       computeUnitLimit,

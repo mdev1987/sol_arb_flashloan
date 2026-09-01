@@ -164,6 +164,7 @@ async function checkRoundTrip(
 
 export async function scanOnce(taker: string): Promise<ArbOpportunity[]> {
   const found: ArbOpportunity[] = [];
+  const scanStart = Date.now();
 
   const amounts = [
     BigInt(Math.round(env.MAX_TRADE_USDC * 1_000_000)),
@@ -171,7 +172,9 @@ export async function scanOnce(taker: string): Promise<ArbOpportunity[]> {
 
   // If DEX_PAIRS is configured, scan those pairs
   if (env.DEX_PAIRS) {
-    for (const [dexA, dexB] of parseUserDexPairs()) {
+    const pairs = parseUserDexPairs();
+    const limited = pairs.slice(0, env.MAX_PAIRS_PER_SCAN);
+    for (const [dexA, dexB] of limited) {
       for (const amount of amounts) {
         try {
           const leg1 = await getLeg(USDC_MINT_STR, SOL_MINT_STR, amount, taker, dexA);
@@ -190,8 +193,8 @@ export async function scanOnce(taker: string): Promise<ArbOpportunity[]> {
       }
     }
   } else {
-    // Default: scan all CROSS_DEX_PAIRS
-    for (const [venueAKey, venueBKey] of CROSS_DEX_PAIRS) {
+    const limited = CROSS_DEX_PAIRS.slice(0, env.MAX_PAIRS_PER_SCAN);
+    for (const [venueAKey, venueBKey] of limited) {
       const dexA = [...VENUE_LABELS[venueAKey]];
       const dexB = [...VENUE_LABELS[venueBKey]];
       for (const amount of amounts) {
@@ -214,5 +217,6 @@ export async function scanOnce(taker: string): Promise<ArbOpportunity[]> {
   }
 
   found.sort((a, b) => b.profitUsd - a.profitUsd);
+  log.debug({ pairs: Math.min(env.MAX_PAIRS_PER_SCAN, env.DEX_PAIRS ? parseUserDexPairs().length : CROSS_DEX_PAIRS.length), durationMs: Date.now() - scanStart, candidates: found.length }, "Scan complete");
   return found;
 }
