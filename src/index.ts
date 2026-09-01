@@ -47,6 +47,10 @@ let eventTimer: ReturnType<typeof setTimeout> | null = null;
 let lastEventScan = 0;
 const seen = new Map<string, number>();
 
+// Event debounce: trigger scan immediately but coalesce rapid events within this window.
+// This replaces the old POLL_INTERVAL_MS delay which added ~5s latency to event-driven scans.
+const EVENT_DEBOUNCE_MS = 200;
+
 function dedupeKey(opp: ArbOpportunity): string {
   return `${opp.path.join(":")}:${opp.inputAmount.toString()}:${opp.dexesUsed.join(",")}`;
 }
@@ -62,14 +66,15 @@ function shouldHandle(opp: ArbOpportunity): boolean {
 function scheduleEventScan(): void {
   if (!state.running) return;
   const now = Date.now();
-  if (now - lastEventScan < env.POLL_INTERVAL_MS) return;
+  // Debounce rapid events: if an event arrived within the debounce window, skip.
+  if (now - lastEventScan < EVENT_DEBOUNCE_MS) return;
   if (eventTimer) return;
 
   eventTimer = setTimeout(() => {
     eventTimer = null;
     lastEventScan = Date.now();
     void runScan("event");
-  }, env.POLL_INTERVAL_MS);
+  }, EVENT_DEBOUNCE_MS);
 }
 
 // ── Scan + simulate pipeline ─────────────────────────────────────────────────

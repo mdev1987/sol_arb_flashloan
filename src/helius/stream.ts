@@ -21,6 +21,7 @@ export class HeliusDexStream {
   private reconnectAttempts = 0;
   private closed = false;
   private reqToLabel = new Map<number, string>();
+  private subToLabel = new Map<number, string>();
   private onActivity: (activity: Activity) => void;
 
   constructor(onActivity: (activity: Activity) => void) {
@@ -78,9 +79,20 @@ export class HeliusDexStream {
       try {
         const msg = JSON.parse(raw.toString()) as Record<string, unknown>;
 
+        // Handle subscribe response: map requestId → subscriptionId
+        if (msg.id != null && msg.result != null && typeof msg.result === "number") {
+          const requestId = msg.id as number;
+          const subscriptionId = msg.result as number;
+          const label = this.reqToLabel.get(requestId);
+          if (label) {
+            this.subToLabel.set(subscriptionId, label);
+          }
+          return;
+        }
+
         if (msg.method === "accountNotification") {
           const subscriptionId = (msg.params as Record<string, unknown>)?.subscription as number;
-          const label = this.reqToLabel.get(subscriptionId) ?? "watched-account";
+          const label = this.subToLabel.get(subscriptionId) ?? "watched-account";
           this.onActivity({
             programLabel: label,
             programId: label.startsWith("account:") ? label.slice(8) : label,
@@ -125,5 +137,6 @@ export class HeliusDexStream {
     this.ws?.close();
     this.ws = null;
     this.reqToLabel.clear();
+    this.subToLabel.clear();
   }
 }

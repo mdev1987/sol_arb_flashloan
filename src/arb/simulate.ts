@@ -178,11 +178,24 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
     if (simOpp.profitBps < env.MIN_PROFIT_BPS) {
       return failure(simOpp, null, `fresh profit ${simOpp.profitBps} bps below min ${env.MIN_PROFIT_BPS}`, 0, 0, 0, 0, 0, 0, 0, 0);
     }
+    if (simOpp.profitUsd < env.MIN_PROFIT_USDC) {
+      return failure(simOpp, null, `fresh profit $${simOpp.profitUsd.toFixed(4)} below min $${env.MIN_PROFIT_USDC}`, 0, 0, 0, 0, 0, 0, 0, 0);
+    }
 
     const built = await buildArbitrage(connection, simOpp, payer.publicKey);
     const tipAccount = selectTipAccount(Number(simOpp.inputAmount % 1_000_000n));
     const sol = await usdPrice(SOL_MINT_STR);
     const profitMint = await usdPrice(simOpp.profitMint);
+
+    // Validate prices — a failed price fetch can produce 0, leading to
+    // division-by-zero in tip calc and zero cost USD (artificially high net profit).
+    if (!Number.isFinite(sol.price) || sol.price <= 0) {
+      return failure(simOpp, null, `invalid SOL/USD price: ${sol.price}`, 0, 0, 0, 0, 0, 0, 0, 0);
+    }
+    if (!Number.isFinite(profitMint.price) || profitMint.price <= 0) {
+      return failure(simOpp, null, `invalid profitMint/USD price: ${profitMint.price}`, 0, 0, 0, 0, 0, 0, 0, 0);
+    }
+
     const baseInputUsd = inputUsd(simOpp, profitMint);
 
     // ── Stage 1: CU estimate without tip ────────────────────────────────

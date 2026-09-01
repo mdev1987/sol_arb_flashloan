@@ -18,6 +18,9 @@ export interface FlashLoanPlan {
  * Jupiter Lend flash-loan adapter.
  * Returns SEPARATE borrowIx and repayIx per official Jupiter docs.
  * STRICT: throws if borrowIx/repayIx are not explicitly provided.
+ *
+ * Fee model: Jupiter Lend flash loans have zero fees — you borrow and repay
+ * the exact same amount. See: https://dev.jup.ag/docs/lend/flashloan/index
  */
 export async function getFlashLoanIx(
   mint: PublicKey,
@@ -51,7 +54,7 @@ export async function getFlashLoanIx(
     );
   }
 
-  log.info({ fee: 0, provider: "jupiter-lend" }, "Flash loan instructions received");
+  log.info({ fee: 0, provider: "jupiter-lend" }, "Flash loan instructions received (zero-fee per Jupiter Lend)");
 
   return {
     provider: "jupiter",

@@ -80,6 +80,17 @@ async function resolveLookupTables(connection: Connection, builds: BuildResponse
 
 // ── Build arbitrage instructions ─────────────────────────────────────────────
 
+/**
+ * Build the complete arbitrage transaction from an opportunity.
+ *
+ * NOTE: Jupiter's `computeBudgetInstructions` from the /build response are
+ * intentionally NOT included. We replace them with our own compute-budget
+ * configuration (setComputeUnitLimit + setComputeUnitPrice) to maintain
+ * control over CU allocation and priority fees across the full transaction.
+ * This is by design — do not add Jupiter's compute-budget instructions
+ * without understanding the impact on CU estimation and fee model.
+ */
+
 export async function buildArbitrage(
   connection: Connection,
   opportunity: ArbOpportunity,
