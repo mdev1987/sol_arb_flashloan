@@ -87,6 +87,23 @@ export async function buildArbitrage(
 ): Promise<BuiltArbitrage> {
   const coreInstructions: TransactionInstruction[] = [];
 
+  // ── Invariant checks ──────────────────────────────────────────────────
+  const first = opportunity.legs[0];
+  const last = opportunity.legs.at(-1);
+  if (!first || !last) throw new Error("Arbitrage requires at least one leg");
+  if (first.inputMint !== opportunity.profitMint) {
+    throw new Error(`profitMint mismatch: expected ${first.inputMint}, got ${opportunity.profitMint}`);
+  }
+  if (first.inputAmount !== opportunity.inputAmount) {
+    throw new Error(`inputAmount mismatch: expected ${first.inputAmount}, got ${opportunity.inputAmount}`);
+  }
+  if (last.outputMint !== first.inputMint) {
+    throw new Error(`round-trip violation: last leg outputs ${last.outputMint}, expected ${first.inputMint}`);
+  }
+  if (last.outputAmount <= first.inputAmount) {
+    throw new Error(`not profitable: output ${last.outputAmount} <= input ${first.inputAmount}`);
+  }
+
   // Flash loan (optional)
   let flashLoan: FlashLoanPlan | null = null;
   if (env.FLASH_LOAN_PROVIDER !== "none") {

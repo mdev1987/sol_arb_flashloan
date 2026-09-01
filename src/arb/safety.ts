@@ -37,7 +37,12 @@ export function assertSafeToTrade(opp: ArbOpportunity): boolean {
   // ── Check 4: Price impact must be acceptable (in bps) ───────────────────
   // Check all legs for excessive price impact
   for (const leg of opp.legs) {
-    const impactBps = Math.round(Number(leg.build.priceImpactPct) * 10_000);
+    const impactPct = Number(leg.build.priceImpactPct);
+    if (!Number.isFinite(impactPct) || impactPct < 0) {
+      log.warn({ impactPct, dexes: leg.routeDexes }, "Safety rejected: invalid price impact");
+      return false;
+    }
+    const impactBps = Math.round(impactPct * 10_000);
     if (impactBps > 200) {
       log.warn({ impactBps, dexes: leg.routeDexes }, "Safety rejected: excessive price impact");
       return false;

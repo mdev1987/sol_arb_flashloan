@@ -20,8 +20,9 @@ import {
   feeFromCu,
   sizeOf,
 } from "./builder";
-import { getBuild, routeDexes, getPricesUsd } from "../jupiter/client";
-import { SOL_MINT_STR, USDC_MINT_STR } from "../config/constants";
+import { getBuild, routeDexes, routeUsesOnly, getPricesUsd } from "../jupiter/client";
+import { SOL_MINT_STR } from "../config/constants";
+import { makeOpportunity } from "./detector";
 
 // ── Single execution identity ────────────────────────────────────────────────
 // Always use the same keypair for simulation and transaction signing.
@@ -81,6 +82,7 @@ function failure(
 
 // ── Fresh builds pipeline ────────────────────────────────────────────────────
 // Re-fetches Jupiter /build for each leg using original parameters.
+// Validates every fresh build against the original constraint before accepting.
 // Ensures simulation is based on the freshest possible quotes, not stale
 // builds from detection (which can be seconds old).
 
@@ -111,6 +113,26 @@ async function refetchLegs(legs: ArbLeg[], taker: string): Promise<ArbLeg[]> {
       return [];
     }
 
+    // Validate build matches requested parameters
+    if (BigInt(build.inAmount) !== currentAmount) {
+      log.warn({ expected: currentAmount.toString(), actual: build.inAmount }, "Fresh build inAmount mismatch — skipping");
+      return [];
+    }
+    if (build.inputMint !== orig.inputMint) {
+      log.warn({ expected: orig.inputMint, actual: build.inputMint }, "Fresh build inputMint mismatch — skipping");
+      return [];
+    }
+    if (build.outputMint !== orig.outputMint) {
+      log.warn({ expected: orig.outputMint, actual: build.outputMint }, "Fresh build outputMint mismatch — skipping");
+      return [];
+    }
+
+    // Revalidate route constraint — the fresh build must use only the constrained DEXes
+    if (orig.constrainedDex && !routeUsesOnly(build, orig.constrainedDex)) {
+      log.warn({ dexes: orig.constrainedDex, route: routeDexes(build) }, "Fresh build route violates DEX constraint — skipping");
+      return [];
+    }
+
     refreshed.push({
       build,
       inputMint: orig.inputMint,
@@ -137,9 +159,25 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
     // Re-fetch fresh builds for each leg before simulation.
     // This ensures we simulate against current market state, not stale detection quotes.
     const freshLegs = await refetchLegs(opp.legs, payer.publicKey.toBase58());
-    const simOpp = freshLegs.length === opp.legs.length
-      ? { ...opp, legs: freshLegs, detectedAt: Date.now() }
-      : opp;
+    if (freshLegs.length !== opp.legs.length) {
+      return failure(opp, null, "fresh build refetch failed", 0, 0, 0, 0, 0, 0, 0, 0);
+    }
+
+    // Rebuild the COMPLETE opportunity from fresh legs.
+    // This ensures profitAmount, profitBps, profitUsd, dexesUsed, path, etc.
+    // are all derived from the same fresh quote set — not stale detection data.
+    const simOpp = await makeOpportunity(freshLegs);
+    if (!simOpp) {
+      return failure(opp, null, "fresh opportunity reconstruction failed", 0, 0, 0, 0, 0, 0, 0, 0);
+    }
+
+    // Re-validate profitability thresholds against fresh data
+    if (simOpp.profitAmount <= 0n) {
+      return failure(simOpp, null, "fresh quotes show no profit", 0, 0, 0, 0, 0, 0, 0, 0);
+    }
+    if (simOpp.profitBps < env.MIN_PROFIT_BPS) {
+      return failure(simOpp, null, `fresh profit ${simOpp.profitBps} bps below min ${env.MIN_PROFIT_BPS}`, 0, 0, 0, 0, 0, 0, 0, 0);
+    }
 
     const built = await buildArbitrage(connection, simOpp, payer.publicKey);
     const tipAccount = selectTipAccount(Number(simOpp.inputAmount % 1_000_000n));

@@ -106,7 +106,7 @@ function validateCrossDex(legs: ArbLeg[]): boolean {
   return true;
 }
 
-async function makeOpportunity(legs: ArbLeg[]): Promise<ArbOpportunity | null> {
+export async function makeOpportunity(legs: ArbLeg[]): Promise<ArbOpportunity | null> {
   if (legs.length < 2) return null;
   const first = legs[0]!;
   const last = legs[legs.length - 1]!;
