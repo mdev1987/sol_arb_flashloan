@@ -84,7 +84,13 @@ export function toInstruction(ix: ApiInstruction): TransactionInstruction {
   });
 }
 
-/** Extract instructions from a BuildResponse in correct order (setup → swap → cleanup → other) */
+/**
+ * Extract instructions from a BuildResponse in correct order (setup → swap → cleanup → other).
+ *
+ * Preserves Jupiter's semantic grouping per leg. When composing multiple legs,
+ * each leg's instruction set is appended independently — this is safe because
+ * otherInstructions are scoped to their own leg's route program interactions.
+ */
 export function instructionsFromBuild(build: BuildResponse, includeCleanup = true): TransactionInstruction[] {
   return [
     ...build.setupInstructions.map(toInstruction),

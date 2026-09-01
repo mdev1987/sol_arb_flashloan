@@ -1,8 +1,10 @@
-import { VersionedTransaction } from "@solana/web3.js";
+import { VersionedTransaction, TransactionMessage, ComputeBudgetProgram } from "@solana/web3.js";
+import { getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction } from "@solana/spl-token";
 import { env } from "./config/env";
 import { log } from "./utils/logger";
 import { bigIntToUsdc, usdcToBigInt } from "./utils/bigint";
 import { getConnection, getKeypair } from "./helius/client";
+import { SOL_MINT } from "./config/constants";
 import { HeliusDexStream } from "./helius/stream";
 import { scanOnce } from "./arb/detector";
 import { assertSafeToTrade } from "./arb/safety";
@@ -106,13 +108,14 @@ async function handleOpportunity(opp: ArbOpportunity): Promise<void> {
 
   // Telegram: simulation result
   if (sim.wouldSucceed && sim.finalTx) {
+    const solUsd = sim.solPriceUsd ?? 0;
     void tgSimulation({
       wouldTrade: true,
       grossProfitUsdc: sim.grossProfitUsd,
       netProfitUsdc: sim.netProfitUsd,
-      priorityFeeUsdc: (sim.priorityFeeLamports / 1e6),
-      tipUsdc: (sim.tipLamports / 1e6),
-      baseFeeUsdc: 5000 / 1e6,
+      priorityFeeUsdc: (sim.priorityFeeLamports / 1e9) * solUsd,
+      tipUsdc: (sim.tipLamports / 1e9) * solUsd,
+      baseFeeUsdc: (sim.baseFeeLamports / 1e9) * solUsd,
       cuUsed: sim.unitsConsumed,
       txSizeBytes: sim.txBytes,
     });
@@ -294,6 +297,27 @@ async function main() {
       );
       process.exit(1);
     }
+  }
+
+  // ── Initialize WSOL ATA once at startup ───────────────────────────────
+  const wsolAta = getAssociatedTokenAddressSync(SOL_MINT, keypair.publicKey);
+  try {
+    const ataIx = createAssociatedTokenAccountIdempotentInstruction(
+      keypair.publicKey, wsolAta, keypair.publicKey, SOL_MINT,
+    );
+    const { blockhash } = await connection.getLatestBlockhash("processed");
+    const ataMsg = new TransactionMessage({
+      payerKey: keypair.publicKey,
+      recentBlockhash: blockhash,
+      instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }), ataIx],
+    }).compileToV0Message();
+    const ataTx = new VersionedTransaction(ataMsg);
+    ataTx.sign([keypair]);
+    const sig = await connection.sendRawTransaction(ataTx.serialize(), { skipPreflight: true });
+    await connection.confirmTransaction(sig, "confirmed");
+    log.info({ ata: wsolAta.toBase58() }, "WSOL ATA initialized");
+  } catch (err) {
+    log.debug({ error: String(err).slice(0, 80) }, "WSOL ATA init skipped (may already exist)");
   }
 
   // ── WebSocket event stream ────────────────────────────────────────────

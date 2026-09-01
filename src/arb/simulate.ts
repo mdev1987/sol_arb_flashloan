@@ -1,5 +1,4 @@
 import {
-  Keypair,
   PublicKey,
   VersionedTransaction,
   TransactionInstruction,
@@ -24,18 +23,14 @@ import { getPricesUsd } from "../jupiter/client";
 
 const SOL_MINT_STR = "So11111111111111111111111111111111111111112";
 
-// ── Simulation payer ─────────────────────────────────────────────────────────
+// ── Single execution identity ────────────────────────────────────────────────
+// Always use the same keypair for simulation and transaction signing.
+// In SIMULATE mode, getKeypair() generates a throwaway if PRIVATE_KEY is empty.
+// This ensures the payer used in buildArbitrage(), simulation, and signing is identical.
 
-const SIMULATION_KEYPAIR = Keypair.generate();
-
-function getSimulationPayer(): { publicKey: PublicKey; signer?: Keypair } {
-  if (env.PRIVATE_KEY) {
-    const signer = getKeypair();
-    return { publicKey: signer.publicKey, signer };
-  }
-  const simulationPayer = process.env.SIMULATION_PAYER?.trim();
-  if (simulationPayer) return { publicKey: new PublicKey(simulationPayer) };
-  return { publicKey: SIMULATION_KEYPAIR.publicKey, signer: SIMULATION_KEYPAIR };
+function getSimulationPayer(): { publicKey: PublicKey; signer: import("@solana/web3.js").Keypair } {
+  const signer = getKeypair();
+  return { publicKey: signer.publicKey, signer };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -98,6 +93,7 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
     const baseInputUsd = inputUsd(opp, profitMint);
 
     // ── Stage 1: Rough CU estimate ──────────────────────────────────────
+    // Assembly: computeBudget → borrow → coreInstructions → repay
     const stage1Instructions: TransactionInstruction[] = [
       ComputeBudgetProgram.setComputeUnitLimit({ units: env.MAX_COMPUTE_UNITS }),
     ];
@@ -112,7 +108,7 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
       instructions: stage1Instructions,
     }).compileToV0Message(built.lookupTables);
     const stage1Tx = new VersionedTransaction(stage1Message);
-    if (payer.signer) stage1Tx.sign([payer.signer]);
+    stage1Tx.sign([payer.signer]);
 
     const stage1Sim = await connection.simulateTransaction(stage1Tx, {
       sigVerify: false,
@@ -144,7 +140,7 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
       1,
       tipAccount,
     );
-    if (payer.signer) candidate.sign([payer.signer]);
+    candidate.sign([payer.signer]);
     const priorityFeeMicroLamports = await estimatePriorityFee(env.HELIUS_API_KEY, candidate);
     const priorityFeeLamports = feeFromCu(priorityFeeMicroLamports, computeUnitLimit);
     const baseFeeLamports = 5_000;
@@ -179,7 +175,7 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
     if (sizeOf(finalTx) > env.MAX_TX_BYTES) {
       return failure(opp, stage1Sim.value.logs ?? null, `transaction is ${sizeOf(finalTx)} bytes (max ${env.MAX_TX_BYTES})`, roughCu, computeUnitLimit, priorityFeeMicroLamports, tipLamports, priorityFeeLamports, totalCostUsd, baseInputUsd, netBps, sizeOf(finalTx));
     }
-    if (payer.signer) finalTx.sign([payer.signer]);
+    finalTx.sign([payer.signer]);
 
     const stage2Sim = await connection.simulateTransaction(finalTx, {
       sigVerify: false,

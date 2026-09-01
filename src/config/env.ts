@@ -4,7 +4,7 @@ import { z } from "zod";
 const envSchema = z.object({
   HELIUS_API_KEY: z.string().min(1),
   JUPITER_API_KEY: z.string().min(1),
-  PRIVATE_KEY: z.string().min(10).default(""),
+  PRIVATE_KEY: z.string().default(""),
 
   MODE: z.enum(["SIMULATE", "SHADOW"]).default("SIMULATE"),
   MAX_TRADE_USDC: z.coerce.number().positive().default(500),

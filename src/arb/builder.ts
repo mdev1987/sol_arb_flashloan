@@ -8,16 +8,14 @@ import {
   VersionedTransaction,
   AddressLookupTableAccount,
 } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { env } from "../config/env";
-import { SOL_MINT_STR, USDC_MINT_STR, SENDER_TIP_ACCOUNTS } from "../config/constants";
+import { SENDER_TIP_ACCOUNTS } from "../config/constants";
 import { log } from "../utils/logger";
 import type { ArbOpportunity } from "../market/types";
 import {
   instructionsFromBuild,
   type BuildResponse,
 } from "../jupiter/client";
-import { extractInstructions, mergeLookupTables } from "../jupiter/build";
 import { getFlashLoanIx, type FlashLoanPlan } from "../jupiter/flashloan";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -89,13 +87,6 @@ export async function buildArbitrage(
 ): Promise<BuiltArbitrage> {
   const coreInstructions: TransactionInstruction[] = [];
 
-  // With SOL paths, ensure WSOL ATA exists
-  if (opportunity.path.includes(SOL_MINT_STR)) {
-    const wsolAta = getAssociatedTokenAddressSync(new PublicKey(SOL_MINT_STR), payer);
-    const { createAssociatedTokenAccountIdempotentInstruction } = await import("@solana/spl-token");
-    coreInstructions.push(createAssociatedTokenAccountIdempotentInstruction(payer, wsolAta, payer, new PublicKey(SOL_MINT_STR)));
-  }
-
   // Flash loan (optional)
   let flashLoan: FlashLoanPlan | null = null;
   if (env.FLASH_LOAN_PROVIDER !== "none") {
@@ -106,10 +97,8 @@ export async function buildArbitrage(
     );
   }
 
-  // Add flash loan borrow instruction
-  if (flashLoan) {
-    coreInstructions.push(flashLoan.borrowIx);
-  }
+  // coreInstructions = ONLY custom logic (no borrowIx, no repayIx)
+  // Final assembly: computeBudget → borrow → coreInstructions → tip → repay
 
   // Add swap instructions from each leg
   for (let i = 0; i < opportunity.legs.length; i++) {
@@ -117,11 +106,6 @@ export async function buildArbitrage(
     const includeCleanup = i === opportunity.legs.length - 1;
     const ixs = instructionsFromBuild(leg.build, includeCleanup);
     coreInstructions.push(...ixs);
-  }
-
-  // Add flash loan repay instruction (MUST be last)
-  if (flashLoan) {
-    coreInstructions.push(flashLoan.repayIx);
   }
 
   const builds = opportunity.legs.map((leg) => leg.build);

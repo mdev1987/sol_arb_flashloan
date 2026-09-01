@@ -6,16 +6,17 @@ import { log } from "./utils/logger";
 // ── Icons ────────────────────────────────────────────────────────────────────
 
 const ICONS = {
-  start: "🚀",
-  scan: "🔍",
-  opportunity: "💰",
-  simulate: "📊",
-  trade: "✅",
-  error: "❌",
-  warning: "⚠️",
-  info: "ℹ️",
-  status: "📈",
-  shutdown: "🛑",
+  start: "\u{1F680}",
+  scan: "\u{1F50D}",
+  opportunity: "\u{1F4B0}",
+  simulate: "\u{1F9EE}",
+  trade: "\u{2705}",
+  error: "\u{274C}",
+  warning: "\u{26A0}\u{FE0F}",
+  info: "\u{2139}\u{FE0F}",
+  status: "\u{1F4CA}",
+  shutdown: "\u{1F6D1}",
+  divider: "\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}",
 } as const;
 
 // ── Markdown Helper ──────────────────────────────────────────────────────────
@@ -28,13 +29,17 @@ function toMd(markdown: string): string {
 
 function fmtStartup(mode: string, config: Record<string, unknown>): string {
   return toMd(`
-${ICONS.start} *Bot Started*
+${ICONS.start} *Sol Arb Bot \u{2014} Online*
+
+${ICONS.divider}
 
 ${ICONS.info} *Mode:* \`${mode}\`
 ${ICONS.info} *Max Trade:* \`${config.maxTradeUsdc}\` USDC
 ${ICONS.info} *Min Profit:* \`${config.minProfitBps}\` bps
 ${ICONS.info} *Flash Loan:* \`${config.flashLoanProvider}\`
-${ICONS.info} *Events:* \`${config.eventsEnabled ? "ON" : "OFF"}\`
+${ICONS.info} *Event Stream:* \`${config.eventsEnabled ? "Active" : "Disabled"}\`
+
+${ICONS.divider}
 `);
 }
 
@@ -45,11 +50,15 @@ function fmtOpportunity(opp: {
   grossProfitUsdc: number;
 }): string {
   return toMd(`
-${ICONS.opportunity} *Arbitrage Opportunity*
+${ICONS.opportunity} *Arb Opportunity Detected*
 
-${ICONS.info} *Path:* \`${opp.path.join(" → ")}\`
-${ICONS.info} *DEXes:* \`${opp.dexesUsed.join(", ")}\`
-${ICONS.info} *Gross Profit:* \`${opp.grossProfitBps}\` bps (\`${opp.grossProfitUsdc.toFixed(4)}\` USDC)
+${ICONS.divider}
+
+${ICONS.info} *Route:* \`${opp.path.join(" \u{2192} ")}\`
+${ICONS.info} *Venues:* \`${opp.dexesUsed.join(" | ")}\`
+${ICONS.info} *Gross:* \`${opp.grossProfitBps}\` bps \u{2022} \`${opp.grossProfitUsdc.toFixed(4)}\` USDC
+
+${ICONS.divider}
 `);
 }
 
@@ -63,18 +72,31 @@ function fmtSimulation(r: {
   cuUsed: number;
   txSizeBytes: number;
 }): string {
-  const icon = r.wouldTrade ? "✅" : "❌";
-  return toMd(`
-${ICONS.simulate} *Simulation Result*
+  const status = r.wouldTrade ? "\u{2705} Profitable" : "\u{274C} Not Profitable";
+  const totalFees = r.priorityFeeUsdc + r.tipUsdc + r.baseFeeUsdc;
 
-${icon} *Would Trade:* \`${r.wouldTrade ? "YES" : "NO"}\`
-${ICONS.info} *Gross Profit:* \`${r.grossProfitUsdc.toFixed(6)}\` USDC
-${ICONS.info} *Net Profit:* \`${r.netProfitUsdc.toFixed(6)}\` USDC
-${ICONS.info} *Priority Fee:* \`${r.priorityFeeUsdc.toFixed(6)}\` USDC
-${ICONS.info} *Tip:* \`${r.tipUsdc.toFixed(6)}\` USDC
-${ICONS.info} *Base Fee:* \`${r.baseFeeUsdc.toFixed(6)}\` USDC
-${ICONS.info} *CU Used:* \`${r.cuUsed.toLocaleString()}\`
-${ICONS.info} *TX Size:* \`${r.txSizeBytes}\` bytes
+  return toMd(`
+${ICONS.simulate} *Simulation Report*
+
+${ICONS.divider}
+
+${ICONS.info} *Status:* ${status}
+${ICONS.info} *Gross:* \`${r.grossProfitUsdc.toFixed(6)}\` USDC
+${ICONS.info} *Net:* \`${r.netProfitUsdc.toFixed(6)}\` USDC
+${ICONS.info} *Total Fees:* \`${totalFees.toFixed(6)}\` USDC
+
+${ICONS.divider}
+
+\u{1F4B3} *Fee Breakdown*
+\u{2022} Priority: \`${r.priorityFeeUsdc.toFixed(6)}\` USDC
+\u{2022} Tip: \`${r.tipUsdc.toFixed(6)}\` USDC
+\u{2022} Base: \`${r.baseFeeUsdc.toFixed(6)}\` USDC
+
+\u{2699}\u{FE0F} *Compute*
+\u{2022} CU: \`${r.cuUsed.toLocaleString()}\`
+\u{2022} Size: \`${r.txSizeBytes}\` bytes
+
+${ICONS.divider}
 `);
 }
 
@@ -86,13 +108,17 @@ function fmtStatus(s: {
   simulatedProfitUsdc: number;
 }): string {
   return toMd(`
-${ICONS.status} *Bot Status*
+${ICONS.status} *Status Report*
+
+${ICONS.divider}
 
 ${ICONS.info} *Uptime:* \`${s.uptime}\`
-${ICONS.info} *Total Scans:* \`${s.totalScans}\`
+${ICONS.info} *Scans:* \`${s.totalScans}\`
 ${ICONS.info} *Opportunities:* \`${s.totalOpportunities}\`
-${ICONS.info} *Trades:* \`${s.totalTrades}\`
-${ICONS.info} *Simulated Profit:* \`${s.simulatedProfitUsdc.toFixed(4)}\` USDC
+${ICONS.info} *Simulated Trades:* \`${s.totalTrades}\`
+${ICONS.info} *Simulated PnL:* \`${s.simulatedProfitUsdc.toFixed(4)}\` USDC
+
+${ICONS.divider}
 `);
 }
 
@@ -100,7 +126,11 @@ function fmtShutdown(reason: string): string {
   return toMd(`
 ${ICONS.shutdown} *Bot Stopped*
 
+${ICONS.divider}
+
 ${ICONS.info} *Reason:* \`${reason}\`
+
+${ICONS.divider}
 `);
 }
 
@@ -110,7 +140,7 @@ let bot: Bot | null = null;
 
 export async function initTelegram(): Promise<void> {
   if (!env.BOT_TOKEN || !env.CHAT_ID) {
-    log.info("Telegram disabled — no BOT_TOKEN or CHAT_ID");
+    log.info("Telegram disabled \u{2014} no BOT_TOKEN or CHAT_ID");
     return;
   }
   try {
@@ -118,7 +148,7 @@ export async function initTelegram(): Promise<void> {
     const me = await bot.api.getMe();
     log.info({ username: me.username }, "Telegram connected");
   } catch (err) {
-    log.warn({ error: String(err) }, "Telegram connection failed — notifications disabled");
+    log.warn({ error: String(err) }, "Telegram connection failed \u{2014} notifications disabled");
     bot = null;
   }
 }

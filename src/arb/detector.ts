@@ -1,5 +1,5 @@
 import { env } from "../config/env";
-import { SOL_MINT_STR, USDC_MINT_STR, CROSS_DEX_PAIRS, VENUE_LABELS, type VenueKey } from "../config/constants";
+import { SOL_MINT_STR, USDC_MINT_STR, CROSS_DEX_PAIRS, VENUE_LABELS } from "../config/constants";
 import { log } from "../utils/logger";
 import type { ArbOpportunity, ArbLeg } from "../market/types";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
@@ -94,11 +94,18 @@ async function getLeg(
 }
 
 function validateCrossDex(legs: ArbLeg[]): boolean {
-  const seen = new Set<string>();
-  for (const leg of legs) {
-    for (const d of leg.routeDexes) seen.add(d.toLowerCase());
+  if (legs.length < 2) return false;
+  // Each leg's DEX set must be disjoint from every other leg's DEX set.
+  // This enforces true cross-DEX arbitrage: leg1 uses DEX A only, leg2 uses DEX B only, A ∩ B = ∅.
+  for (let i = 0; i < legs.length; i++) {
+    for (let j = i + 1; j < legs.length; j++) {
+      const setA = new Set(legs[i]!.routeDexes.map((d) => d.toLowerCase()));
+      for (const d of legs[j]!.routeDexes) {
+        if (setA.has(d.toLowerCase())) return false;
+      }
+    }
   }
-  return seen.size >= 2;
+  return true;
 }
 
 async function makeOpportunity(legs: ArbLeg[]): Promise<ArbOpportunity | null> {
@@ -155,39 +162,11 @@ async function checkRoundTrip(
   return null;
 }
 
-// ── Triangular detection ─────────────────────────────────────────────────────
-
-async function checkTriangular(
-  baseMint: string,
-  midMint: string,
-  quoteMint: string,
-  amount: bigint,
-  taker: string,
-): Promise<ArbOpportunity | null> {
-  if (new Set([baseMint, midMint, quoteMint]).size !== 3) return null;
-  // With exact DEX-pair configuration, triangles are intentionally not inferred
-  if (parseUserDexPairs().length > 0) return null;
-  const leg1 = await getLeg(baseMint, midMint, amount, taker);
-  if (!leg1) return null;
-  const leg2 = await getLeg(midMint, quoteMint, leg1.outputAmount, taker);
-  if (!leg2) return null;
-  const leg3 = await getLeg(quoteMint, baseMint, leg2.outputAmount, taker);
-  if (!leg3) return null;
-  return makeOpportunity([leg1, leg2, leg3]);
-}
-
 // ── Main scan ────────────────────────────────────────────────────────────────
 
 export async function scanOnce(taker: string): Promise<ArbOpportunity[]> {
   const found: ArbOpportunity[] = [];
 
-  // Configurable base/quote mints or defaults
-  const baseMints = env.DEX_PAIRS
-    ? []
-    : [USDC_MINT_STR];
-  const quoteMints = env.DEX_PAIRS
-    ? []
-    : [SOL_MINT_STR];
   const amounts = [
     BigInt(Math.round(env.MAX_TRADE_USDC * 1_000_000)),
   ];
@@ -231,23 +210,6 @@ export async function scanOnce(taker: string): Promise<ArbOpportunity[]> {
           }
         } catch (error) {
           log.debug({ venueA: venueAKey, venueB: venueBKey, error: String(error).slice(0, 80) }, "Pair check failed");
-        }
-      }
-    }
-
-    // Triangular (only when no DEX_PAIRS configured)
-    for (const base of baseMints) {
-      for (const mid of quoteMints) {
-        for (const quote of quoteMints) {
-          if (base === mid || base === quote || mid === quote) continue;
-          try {
-            const opp = await checkTriangular(base, mid, quote, amounts[0]!, taker);
-            if (opp && opp.profitBps >= env.MIN_PROFIT_BPS && opp.profitUsd >= env.MIN_PROFIT_USDC) {
-              found.push(opp);
-            }
-          } catch (error) {
-            log.warn({ error: String(error).slice(0, 100) }, "Triangular check failed");
-          }
         }
       }
     }
