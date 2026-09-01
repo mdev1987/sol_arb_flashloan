@@ -68,8 +68,8 @@ export function assertSafeToTrade(opp: ArbOpportunity): boolean {
   }
 
   // ── Check 8: Flash-loan compatible ──────────────────────────────────────
-  if (!opp.flashLoanCompatible) {
-    log.warn({ profitMint: opp.profitMint }, "Safety rejected: not flash-loan compatible");
+  if (!opp.flashLoanAssetSupported) {
+    log.warn({ profitMint: opp.profitMint }, "Safety rejected: flash-loan asset not supported");
     return false;
   }
 

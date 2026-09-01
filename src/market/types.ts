@@ -33,8 +33,8 @@ export interface ArbOpportunity {
   /** Unique DEX labels used across all legs */
   dexesUsed: string[];
   detectedAt: number;
-  /** Whether this opportunity is flash-loan compatible */
-  flashLoanCompatible: boolean;
+  /** Whether the flash-loan provider supports this asset */
+  flashLoanAssetSupported: boolean;
   /** Legacy venue fields for safety checks */
   venueA?: string[];
   venueB?: string[];

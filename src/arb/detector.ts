@@ -8,10 +8,8 @@ import {
   getBuild,
   routeUsesOnly,
   routeDexes,
-  priceImpactToBps,
-  type BuildResponse,
+  getPricesUsd,
 } from "../jupiter/client";
-import { getPricesUsd } from "../jupiter/client";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -132,7 +130,7 @@ async function makeOpportunity(legs: ArbLeg[]): Promise<ArbOpportunity | null> {
     profitUsd,
     dexesUsed,
     detectedAt: Date.now(),
-    flashLoanCompatible: first.inputMint === SOL_MINT_STR || first.inputMint === USDC_MINT_STR,
+    flashLoanAssetSupported: first.inputMint === SOL_MINT_STR || first.inputMint === USDC_MINT_STR,
     venueA: legs[0]?.constrainedDex,
     venueB: legs[1]?.constrainedDex,
     quoteA: legs[0]?.build,

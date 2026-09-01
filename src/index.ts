@@ -301,23 +301,29 @@ async function main() {
 
   // ── Initialize WSOL ATA once at startup ───────────────────────────────
   const wsolAta = getAssociatedTokenAddressSync(SOL_MINT, keypair.publicKey);
-  try {
-    const ataIx = createAssociatedTokenAccountIdempotentInstruction(
-      keypair.publicKey, wsolAta, keypair.publicKey, SOL_MINT,
-    );
-    const { blockhash } = await connection.getLatestBlockhash("processed");
-    const ataMsg = new TransactionMessage({
-      payerKey: keypair.publicKey,
-      recentBlockhash: blockhash,
-      instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }), ataIx],
-    }).compileToV0Message();
-    const ataTx = new VersionedTransaction(ataMsg);
-    ataTx.sign([keypair]);
-    const sig = await connection.sendRawTransaction(ataTx.serialize(), { skipPreflight: true });
-    await connection.confirmTransaction(sig, "confirmed");
-    log.info({ ata: wsolAta.toBase58() }, "WSOL ATA initialized");
-  } catch (err) {
-    log.debug({ error: String(err).slice(0, 80) }, "WSOL ATA init skipped (may already exist)");
+  const existingAta = await connection.getAccountInfo(wsolAta);
+  if (!existingAta) {
+    try {
+      const ataIx = createAssociatedTokenAccountIdempotentInstruction(
+        keypair.publicKey, wsolAta, keypair.publicKey, SOL_MINT,
+      );
+      const { blockhash } = await connection.getLatestBlockhash("processed");
+      const ataMsg = new TransactionMessage({
+        payerKey: keypair.publicKey,
+        recentBlockhash: blockhash,
+        instructions: [ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 }), ataIx],
+      }).compileToV0Message();
+      const ataTx = new VersionedTransaction(ataMsg);
+      ataTx.sign([keypair]);
+      const sig = await connection.sendRawTransaction(ataTx.serialize(), { skipPreflight: true });
+      await connection.confirmTransaction(sig, "confirmed");
+      log.info({ ata: wsolAta.toBase58() }, "WSOL ATA created");
+    } catch (err) {
+      log.fatal({ error: String(err).slice(0, 120) }, "WSOL ATA creation failed — aborting startup");
+      process.exit(1);
+    }
+  } else {
+    log.debug({ ata: wsolAta.toBase58() }, "WSOL ATA already exists");
   }
 
   // ── WebSocket event stream ────────────────────────────────────────────

@@ -5,11 +5,13 @@ import {
 } from "@solana/web3.js";
 import { env } from "../config/env";
 import { log } from "../utils/logger";
-import { RateLimiter, withRetry } from "../utils/retry";
+import { RateLimiter } from "../utils/retry";
 
 const BASE_URL = "https://api.jup.ag";
 
-const jupiterLimiter = new RateLimiter(env.JUPITER_RATE_LIMIT_RPS);
+// Separate rate limiters: Build API is latency-sensitive, Price API is cheap reads
+const buildLimiter = new RateLimiter(env.JUPITER_RATE_LIMIT_RPS);
+const priceLimiter = new RateLimiter(Math.max(env.JUPITER_RATE_LIMIT_RPS, 5));
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -124,7 +126,7 @@ export function routeUsesAtLeastTwoDistinctDexes(build: BuildResponse): boolean 
 
 /** Fetch a Jupiter /swap/v2/build quote with rate limiting and retry */
 export async function getBuild(params: BuildParams): Promise<BuildResponse | null> {
-  return jupiterLimiter.schedule(async () => {
+  return buildLimiter.schedule(async () => {
     const url = new URL(`${BASE_URL}/swap/v2/build`);
     url.searchParams.set("inputMint", params.inputMint);
     url.searchParams.set("outputMint", params.outputMint);
@@ -167,7 +169,7 @@ export interface PriceV3Entry {
 /** Fetch token prices from Jupiter Price API v3 */
 export async function getPricesUsd(mints: string[]): Promise<Record<string, PriceV3Entry>> {
   if (mints.length === 0) return {};
-  return jupiterLimiter.schedule(async () => {
+  return priceLimiter.schedule(async () => {
     const url = new URL(`${BASE_URL}/price/v3`);
     url.searchParams.set("ids", mints.join(","));
     try {

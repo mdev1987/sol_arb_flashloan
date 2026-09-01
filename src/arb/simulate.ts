@@ -92,8 +92,11 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
     const profitMint = await usdPrice(opp.profitMint);
     const baseInputUsd = inputUsd(opp, profitMint);
 
-    // ── Stage 1: Rough CU estimate ──────────────────────────────────────
+    // ── Stage 1: CU estimate without tip ────────────────────────────────
+    // Purpose: measure execution cost of the core arbitrage logic.
+    // This is NOT the final transaction — it omits the tip instruction.
     // Assembly: computeBudget → borrow → coreInstructions → repay
+    // The CU margin applied here serves as a precomputed safety limit for Stage 2.
     const stage1Instructions: TransactionInstruction[] = [
       ComputeBudgetProgram.setComputeUnitLimit({ units: env.MAX_COMPUTE_UNITS }),
     ];
@@ -159,6 +162,10 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
     const netBps = baseInputUsd > 0 ? (netUsd / baseInputUsd) * 10_000 : 0;
 
     // ── Stage 2: Final TX simulation ────────────────────────────────────
+    // Builds the complete transaction including tip, then simulates it.
+    // The CU limit from Stage 1 is used as the precomputed safety limit.
+    // If Stage 2 CU exceeds Stage 1 CU + margin, the trade is rejected.
+    // The submitted transaction uses this same CU limit (no re-optimization).
     const { blockhash: finalHash } = await connection.getLatestBlockhash("processed");
     const finalTx = buildVersionedTransaction(
       payer.publicKey,
