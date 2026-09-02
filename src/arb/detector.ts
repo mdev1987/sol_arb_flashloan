@@ -1,5 +1,6 @@
 import { env } from "../config/env";
-import { SOL_MINT_STR, USDC_MINT_STR, CROSS_DEX_PAIRS, VENUE_LABELS } from "../config/constants";
+import { SOL_MINT_STR, USDC_MINT_STR, CROSS_DEX_PAIRS, VENUE_LABELS, TOKEN_PAIRS } from "../config/constants";
+import type { TokenPair } from "../config/constants";
 import { log } from "../utils/logger";
 import type { ArbOpportunity, ArbLeg } from "../market/types";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
@@ -163,21 +164,54 @@ async function checkRoundTrip(
 // ── Main scan ────────────────────────────────────────────────────────────────
 
 let scanOffset = 0;
+let tokenPairOffset = 0;
 
 async function scanPair(
   dexA: string[],
   dexB: string[],
   amount: bigint,
   taker: string,
+  tokenPair?: TokenPair,
 ): Promise<ArbOpportunity | null> {
+  const baseMint = tokenPair?.baseMint ?? USDC_MINT_STR;
+  const quoteMint = tokenPair?.quoteMint ?? SOL_MINT_STR;
+  const baseSymbol = tokenPair?.baseSymbol ?? "USDC";
+  const quoteSymbol = tokenPair?.baseSymbol === "SOL" ? "mSOL/BONK/JUP" : "SOL";
+
   try {
-    const leg1 = await getLeg(USDC_MINT_STR, SOL_MINT_STR, amount, taker, dexA);
-    if (!leg1) return null;
-    if (!routeUsesOnly(leg1.build, dexA)) return null;
-    const leg2 = await getLeg(SOL_MINT_STR, USDC_MINT_STR, leg1.outputAmount, taker, dexB);
-    if (!leg2) return null;
-    if (!routeUsesOnly(leg2.build, dexB)) return null;
-    return await makeOpportunity([leg1, leg2]);
+    const leg1 = await getLeg(baseMint, quoteMint, amount, taker, dexA);
+    if (!leg1) {
+      log.debug({ dexA, baseSymbol, quoteSymbol }, "Leg1: no route");
+      return null;
+    }
+    if (!routeUsesOnly(leg1.build, dexA)) {
+      log.debug({ dexA, route: routeDexes(leg1.build) }, "Leg1: route violates DEX constraint");
+      return null;
+    }
+    const leg2 = await getLeg(quoteMint, baseMint, leg1.outputAmount, taker, dexB);
+    if (!leg2) {
+      log.debug({ dexB, baseSymbol, quoteSymbol }, "Leg2: no route");
+      return null;
+    }
+    if (!routeUsesOnly(leg2.build, dexB)) {
+      log.debug({ dexB, route: routeDexes(leg2.build) }, "Leg2: route violates DEX constraint");
+      return null;
+    }
+    const opp = await makeOpportunity([leg1, leg2]);
+    if (opp) {
+      log.info(
+        {
+          path: opp.path.map((p) => p.slice(0, 8)).join("->"),
+          profitBps: opp.profitBps,
+          profitUsd: opp.profitUsd.toFixed(6),
+          dexA: dexA.join(","),
+          dexB: dexB.join(","),
+          baseSymbol,
+        },
+        "Candidate found",
+      );
+    }
+    return opp;
   } catch {
     return null;
   }
@@ -186,10 +220,9 @@ async function scanPair(
 export async function scanOnce(taker: string): Promise<ArbOpportunity[]> {
   const found: ArbOpportunity[] = [];
   const scanStart = Date.now();
+  const pairLabel = env.DEX_PAIRS ? "user" : "builtin";
 
-  const amount = BigInt(Math.round(env.MAX_TRADE_USDC * 1_000_000));
-
-  // Build full pair list
+  // Build full DEX pair list
   const allPairs: Array<[string[], string[]]> = [];
   if (env.DEX_PAIRS) {
     const parsed = parseUserDexPairs();
@@ -200,9 +233,7 @@ export async function scanOnce(taker: string): Promise<ArbOpportunity[]> {
     }
   }
 
-  // Rotate through pairs: each scan starts from a different offset so that
-  // over multiple scans, all pairs are covered. This gives better coverage
-  // than always scanning the same first N pairs.
+  // Rotate through DEX pairs: each scan starts from a different offset
   const totalPairs = allPairs.length;
   const pairsToScan = Math.min(env.MAX_PAIRS_PER_SCAN, totalPairs);
   const selectedPairs: Array<[string[], string[]]> = [];
@@ -211,22 +242,49 @@ export async function scanOnce(taker: string): Promise<ArbOpportunity[]> {
   }
   scanOffset = (scanOffset + pairsToScan) % totalPairs;
 
-  // Scan pairs concurrently — the rate limiter serializes individual Jupiter
-  // requests, but overlapping network latency across pairs reduces total scan time.
+  // Rotate through token pairs for variety
+  const tokenPair = TOKEN_PAIRS[tokenPairOffset % TOKEN_PAIRS.length]!;
+  tokenPairOffset = (tokenPairOffset + 1) % TOKEN_PAIRS.length;
+  const tradeAmount = BigInt(Math.round(env.MAX_TRADE_USDC * 10 ** tokenPair.baseDecimals));
+
+  // Scan pairs concurrently
   const results = await Promise.allSettled(
-    selectedPairs.map(([dexA, dexB]) => scanPair(dexA, dexB, amount, taker)),
+    selectedPairs.map(([dexA, dexB]) => scanPair(dexA, dexB, tradeAmount, taker, tokenPair)),
   );
 
+  let noRouteCount = 0;
+  let belowThresholdCount = 0;
   for (const r of results) {
     if (r.status === "fulfilled" && r.value) {
       const opp = r.value;
       if (opp.profitBps >= env.MIN_PROFIT_BPS && opp.profitUsd >= env.MIN_PROFIT_USDC) {
         found.push(opp);
+      } else {
+        belowThresholdCount++;
+        log.debug(
+          { profitBps: opp.profitBps, profitUsd: opp.profitUsd.toFixed(6), minBps: env.MIN_PROFIT_BPS, minUsd: env.MIN_PROFIT_USDC },
+          "Candidate below threshold",
+        );
       }
+    } else {
+      noRouteCount++;
     }
   }
 
   found.sort((a, b) => b.profitUsd - a.profitUsd);
-  log.debug({ pairs: pairsToScan, totalPairs, offset: scanOffset, durationMs: Date.now() - scanStart, candidates: found.length }, "Scan complete");
+  log.info(
+    {
+      pair: `${tokenPair.baseSymbol}/${tokenPair.baseSymbol === "USDC" ? "SOL" : "?"}`,
+      dexPairs: pairsToScan,
+      totalPairs,
+      offset: scanOffset,
+      tokenPair: `${tokenPair.baseSymbol}`,
+      durationMs: Date.now() - scanStart,
+      candidates: found.length,
+      noRoute: noRouteCount,
+      belowThreshold: belowThresholdCount,
+    },
+    "Scan complete",
+  );
   return found;
 }

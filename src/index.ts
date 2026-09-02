@@ -347,7 +347,12 @@ async function main() {
       maxCu: env.MAX_COMPUTE_UNITS,
       flashLoan: env.FLASH_LOAN_PROVIDER,
       events: env.EVENTS_ENABLED,
-      dexPairs: env.DEX_PAIRS || "(all built-in pairs)",
+      dexPairs: env.DEX_PAIRS || "(all built-in pairs + PumpSwap + Raydium AMM)",
+      tokenPairs: "USDC/SOL, USDC/USDT, SOL/mSOL, SOL/BONK, SOL/JUP",
+      maxPairsPerScan: env.MAX_PAIRS_PER_SCAN,
+      minProfitBps: env.MIN_PROFIT_BPS,
+      minProfitUsd: env.MIN_PROFIT_USDC,
+      maxTradeUsdc: env.MAX_TRADE_USDC,
     },
     "Bot configuration",
   );

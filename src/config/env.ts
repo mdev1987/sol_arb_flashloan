@@ -7,9 +7,9 @@ const envSchema = z.object({
   PRIVATE_KEY: z.string().default(""),
 
   MODE: z.enum(["SIMULATE", "SHADOW", "LIVE"]).default("SIMULATE"),
-  MAX_TRADE_USDC: z.coerce.number().positive().default(500),
-  MIN_PROFIT_BPS: z.coerce.number().nonnegative().default(10),
-  MIN_PROFIT_USDC: z.coerce.number().nonnegative().default(0.5),
+  MAX_TRADE_USDC: z.coerce.number().positive().default(100),
+  MIN_PROFIT_BPS: z.coerce.number().nonnegative().default(3),
+  MIN_PROFIT_USDC: z.coerce.number().nonnegative().default(0.05),
   MAX_SLIPPAGE_BPS: z.coerce.number().positive().default(100),
   JUPITER_QUOTE_MODE: z.literal("fast").default("fast"),
   JUPITER_RTSE: z
@@ -42,7 +42,7 @@ const envSchema = z.object({
   DEX_PAIRS: z.string().default(""),
   BOT_TOKEN: z.string().default(""),
   CHAT_ID: z.string().default(""),
-  MAX_PAIRS_PER_SCAN: z.coerce.number().positive().default(4),
+  MAX_PAIRS_PER_SCAN: z.coerce.number().positive().default(6),
   MAX_OPPORTUNITY_AGE_MS: z.coerce.number().positive().default(10_000),
 });
 
