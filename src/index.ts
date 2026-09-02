@@ -182,10 +182,22 @@ async function handleOpportunity(opp: ArbOpportunity): Promise<void> {
 
   // LIVE mode — execute via Helius Sender with safeguards
   if (state.mode === "LIVE") {
-    // Pre-send safeguard: fresh balance check
+    // Pre-send safeguard: fresh balance check (with retry for transient RPC errors)
     const connection = getConnection();
     const keypair = getKeypair();
-    const balance = await connection.getBalance(keypair.publicKey);
+    let balance = 0;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        balance = await connection.getBalance(keypair.publicKey);
+        break;
+      } catch (balErr) {
+        if (attempt === 3) {
+          log.warn({ error: String(balErr).slice(0, 100) }, "LIVE: balance check failed after retries — skipping");
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 1000 * attempt));
+      }
+    }
     const minReserveLamports = Math.round(env.MIN_SOL_RESERVE * 1e9);
     if (balance < minReserveLamports + sim.totalCostLamports) {
       log.warn(
@@ -349,12 +361,32 @@ async function main() {
     eventsEnabled: env.EVENTS_ENABLED,
   });
 
-  // ── Test connection ───────────────────────────────────────────────────
+  // ── Test connection (with retry for transient RPC errors) ─────────────
   const connection = getConnection();
   const keypair = getKeypair();
 
-  const slot = await connection.getSlot();
-  const solBalance = await connection.getBalance(keypair.publicKey);
+  let slot = 0;
+  let solBalance = 0;
+  const MAX_RPC_RETRIES = 5;
+  for (let attempt = 1; attempt <= MAX_RPC_RETRIES; attempt++) {
+    try {
+      slot = await connection.getSlot();
+      solBalance = await connection.getBalance(keypair.publicKey);
+      break;
+    } catch (rpcError) {
+      const isLast = attempt === MAX_RPC_RETRIES;
+      const delayMs = Math.min(2000 * attempt, 30_000);
+      log.warn(
+        { attempt, maxRetries: MAX_RPC_RETRIES, delayMs, error: String(rpcError).slice(0, 120) },
+        isLast ? "RPC connection failed — all retries exhausted" : "RPC connection failed — retrying",
+      );
+      if (isLast) {
+        log.fatal("Cannot connect to Solana RPC after all retries — aborting");
+        process.exit(1);
+      }
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
 
   log.info(
     {
@@ -387,6 +419,25 @@ async function main() {
       );
       process.exit(1);
     }
+  }
+
+  // ── Jupiter connectivity test ────────────────────────────────────────
+  try {
+    const { getBuild } = await import("./jupiter/client");
+    const testBuild = await getBuild({
+      inputMint: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", // USDC
+      outputMint: "So11111111111111111111111111111111111111112", // wSOL
+      amount: 1_000_000n, // 1 USDC
+      taker: keypair.publicKey.toBase58(),
+      slippageBps: 50,
+    });
+    if (testBuild) {
+      log.info({ outAmount: testBuild.outAmount, route: testBuild.routePlan.map((s) => s.swapInfo.label).join(" -> ") }, "Jupiter API connectivity OK");
+    } else {
+      log.warn("Jupiter /build returned no route — API key or network issue? Scans will fail.");
+    }
+  } catch (jupErr) {
+    log.warn({ error: String(jupErr).slice(0, 150) }, "Jupiter connectivity test failed — scans may not work");
   }
 
   // ── Initialize WSOL ATA once at startup ───────────────────────────────
@@ -437,6 +488,11 @@ async function main() {
   let scanCount = 0;
   let statusCounter = 0;
 
+  // Heartbeat: write to bot.log every 30s even if scans are idle (keeps oxfile health check happy)
+  const heartbeat = setInterval(() => {
+    log.debug({ uptime: ((Date.now() - state.startTime) / 1000 / 60).toFixed(1) + "m" }, "heartbeat");
+  }, 30_000);
+
   while (state.running) {
     scanCount++;
     void runScan("poll");
@@ -457,6 +513,7 @@ async function main() {
   }
 
   // ── Shutdown ──────────────────────────────────────────────────────────
+  clearInterval(heartbeat);
   stream?.close();
   if (eventTimer) clearTimeout(eventTimer);
   logStatus();

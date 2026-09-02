@@ -144,7 +144,10 @@ export async function getBuild(params: BuildParams): Promise<BuildResponse | nul
       const res = await fetch(url, { headers: headers() });
       if (!res.ok) {
         const body = await res.text().catch(() => "");
-        log.warn({ status: res.status, body: body.slice(0, 300) }, "Jupiter /build error");
+        log.warn(
+          { status: res.status, body: body.slice(0, 300), inputMint: params.inputMint, outputMint: params.outputMint, amount: params.amount.toString(), dexes: params.dexes, mode: env.JUPITER_QUOTE_MODE },
+          "Jupiter /build error",
+        );
         return null;
       }
       return (await res.json()) as BuildResponse;
