@@ -155,11 +155,19 @@ async function refetchLegs(legs: ArbLeg[], taker: string): Promise<ArbLeg[]> {
 export async function simulateOpportunity(opp: ArbOpportunity): Promise<SimulationResult> {
   const connection = getConnection();
   const payer = getSimulationPayer();
+  const pipelineStart = Date.now();
 
   try {
+    // Reject stale opportunities — if detection is too old, the opportunity
+    // has likely already been arbitraged by faster bots.
+    if (Date.now() - opp.detectedAt > env.MAX_OPPORTUNITY_AGE_MS) {
+      return failure(opp, null, `opportunity stale: ${Date.now() - opp.detectedAt}ms old (max ${env.MAX_OPPORTUNITY_AGE_MS}ms)`, 0, 0, 0, 0, 0, 0, 0, 0);
+    }
+
     // Re-fetch fresh builds for each leg before simulation.
     // This ensures we simulate against current market state, not stale detection quotes.
     const freshLegs = await refetchLegs(opp.legs, payer.publicKey.toBase58());
+    const freshQuotedAt = Date.now();
     if (freshLegs.length !== opp.legs.length) {
       return failure(opp, null, "fresh build refetch failed", 0, 0, 0, 0, 0, 0, 0, 0);
     }
@@ -307,6 +315,8 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
       return failure(simOpp, stage2Sim.value.logs ?? null, `stage-2 CU ${finalCu} exceeds configured maximum`, finalCu, computeUnitLimit, priorityFeeMicroLamports, tipLamports, priorityFeeLamports, totalCostUsd, baseInputUsd, netBps, sizeOf(finalTx));
     }
 
+    const simulatedAt = Date.now();
+
     log.info(
       {
         stage1Cu: roughCu,
@@ -318,6 +328,7 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
         netUsd: netUsd.toFixed(4),
         netBps: netBps.toFixed(2),
         txBytes: sizeOf(finalTx),
+        pipelineMs: simulatedAt - pipelineStart,
       },
       "Two-stage simulation passed",
     );
@@ -342,6 +353,9 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
       finalTx,
       tipAccount,
       solPriceUsd,
+      freshQuotedAt,
+      simulatedAt,
+      pipelineDurationMs: simulatedAt - pipelineStart,
     };
   } catch (error) {
     return failure(opp, null, String(error), 0, 0, 0, 0, 0, 0, 0, 0);
@@ -361,6 +375,7 @@ export function logSimulationResult(result: SimulationResult): void {
       bytes: result.txBytes,
       dexes: opp.dexesUsed.join(", "),
       wouldLand: result.wouldSucceed,
+      pipelineMs: result.pipelineDurationMs,
       ...(result.error ? { reason: result.error } : {}),
     },
     result.wouldSucceed ? "SIMULATION: would land" : "SIMULATION: would fail",

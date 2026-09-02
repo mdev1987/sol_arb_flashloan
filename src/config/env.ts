@@ -43,6 +43,7 @@ const envSchema = z.object({
   BOT_TOKEN: z.string().default(""),
   CHAT_ID: z.string().default(""),
   MAX_PAIRS_PER_SCAN: z.coerce.number().positive().default(4),
+  MAX_OPPORTUNITY_AGE_MS: z.coerce.number().positive().default(10_000),
 });
 
 export type Env = z.infer<typeof envSchema>;

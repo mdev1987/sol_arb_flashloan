@@ -66,11 +66,16 @@ export interface SimulationResult {
   finalTx?: VersionedTransaction;
   tipAccount?: import("@solana/web3.js").PublicKey;
   solPriceUsd?: number;
+  /** Pipeline lifecycle timestamps */
+  freshQuotedAt?: number;
+  simulatedAt?: number;
+  /** Total wall-clock time from detection to simulation completion */
+  pipelineDurationMs?: number;
 }
 
 // ── Bot types ────────────────────────────────────────────────────────────────
 
-export type BotMode = "SIMULATE" | "SHADOW";
+export type BotMode = "SIMULATE" | "SHADOW" | "LIVE";
 
 export interface BotState {
   mode: BotMode;

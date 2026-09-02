@@ -162,6 +162,8 @@ async function checkRoundTrip(
 
 // ── Main scan ────────────────────────────────────────────────────────────────
 
+let scanOffset = 0;
+
 async function scanPair(
   dexA: string[],
   dexB: string[],
@@ -187,22 +189,32 @@ export async function scanOnce(taker: string): Promise<ArbOpportunity[]> {
 
   const amount = BigInt(Math.round(env.MAX_TRADE_USDC * 1_000_000));
 
-  // Build pair list
-  const pairs: Array<[string[], string[]]> = [];
+  // Build full pair list
+  const allPairs: Array<[string[], string[]]> = [];
   if (env.DEX_PAIRS) {
     const parsed = parseUserDexPairs();
-    pairs.push(...parsed.slice(0, env.MAX_PAIRS_PER_SCAN));
+    allPairs.push(...parsed);
   } else {
-    const limited = CROSS_DEX_PAIRS.slice(0, env.MAX_PAIRS_PER_SCAN);
-    for (const [venueAKey, venueBKey] of limited) {
-      pairs.push([[...VENUE_LABELS[venueAKey]], [...VENUE_LABELS[venueBKey]]]);
+    for (const [venueAKey, venueBKey] of CROSS_DEX_PAIRS) {
+      allPairs.push([[...VENUE_LABELS[venueAKey]], [...VENUE_LABELS[venueBKey]]]);
     }
   }
+
+  // Rotate through pairs: each scan starts from a different offset so that
+  // over multiple scans, all pairs are covered. This gives better coverage
+  // than always scanning the same first N pairs.
+  const totalPairs = allPairs.length;
+  const pairsToScan = Math.min(env.MAX_PAIRS_PER_SCAN, totalPairs);
+  const selectedPairs: Array<[string[], string[]]> = [];
+  for (let i = 0; i < pairsToScan; i++) {
+    selectedPairs.push(allPairs[(scanOffset + i) % totalPairs]!);
+  }
+  scanOffset = (scanOffset + pairsToScan) % totalPairs;
 
   // Scan pairs concurrently — the rate limiter serializes individual Jupiter
   // requests, but overlapping network latency across pairs reduces total scan time.
   const results = await Promise.allSettled(
-    pairs.map(([dexA, dexB]) => scanPair(dexA, dexB, amount, taker)),
+    selectedPairs.map(([dexA, dexB]) => scanPair(dexA, dexB, amount, taker)),
   );
 
   for (const r of results) {
@@ -215,6 +227,6 @@ export async function scanOnce(taker: string): Promise<ArbOpportunity[]> {
   }
 
   found.sort((a, b) => b.profitUsd - a.profitUsd);
-  log.debug({ pairs: pairs.length, durationMs: Date.now() - scanStart, candidates: found.length }, "Scan complete");
+  log.debug({ pairs: pairsToScan, totalPairs, offset: scanOffset, durationMs: Date.now() - scanStart, candidates: found.length }, "Scan complete");
   return found;
 }

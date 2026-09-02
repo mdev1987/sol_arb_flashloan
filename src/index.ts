@@ -9,6 +9,7 @@ import { HeliusDexStream } from "./helius/stream";
 import { scanOnce } from "./arb/detector";
 import { assertSafeToTrade } from "./arb/safety";
 import { simulateOpportunity, logSimulationResult } from "./arb/simulate";
+import { sendViaSender, confirmSignature, getTransactionPnlUsd } from "./helius/sender";
 import { initTelegram, tgStartup, tgOpportunity, tgSimulation, tgStatus, tgShutdown, stopTelegram } from "./telegram";
 import type { ArbOpportunity, BotState, SimulationResult } from "./market/types";
 
@@ -179,10 +180,78 @@ async function handleOpportunity(opp: ArbOpportunity): Promise<void> {
     );
   }
 
-  // LIVE mode — not compiled in for safety
-  // When ready to enable live trading:
-  // 1. Change env MODE enum to include "LIVE"
-  // 2. Add LIVE case here: sendViaSender(sim.finalTx) → confirmTransaction → getTransactionPnlUsd
+  // LIVE mode — execute via Helius Sender with safeguards
+  if (state.mode === "LIVE") {
+    // Pre-send safeguard: fresh balance check
+    const connection = getConnection();
+    const keypair = getKeypair();
+    const balance = await connection.getBalance(keypair.publicKey);
+    const minReserveLamports = Math.round(env.MIN_SOL_RESERVE * 1e9);
+    if (balance < minReserveLamports + sim.totalCostLamports) {
+      log.warn(
+        {
+          balanceSol: (balance / 1e9).toFixed(4),
+          requiredSol: ((minReserveLamports + sim.totalCostLamports) / 1e9).toFixed(4),
+        },
+        "LIVE: insufficient balance for base fee + tip — skipping",
+      );
+      return;
+    }
+
+    // Pre-send safeguard: reject if pipeline took too long (opportunity may be stale)
+    const maxPipelineMs = 5_000;
+    if (sim.pipelineDurationMs && sim.pipelineDurationMs > maxPipelineMs) {
+      log.warn(
+        { pipelineMs: sim.pipelineDurationMs, maxMs: maxPipelineMs },
+        "LIVE: pipeline too slow — opportunity likely stale, skipping",
+      );
+      return;
+    }
+
+    try {
+      const sendStart = Date.now();
+      const sig = await sendViaSender(sim.finalTx);
+      const sendMs = Date.now() - sendStart;
+
+      log.info({ sig, sendMs, pipelineMs: sim.pipelineDurationMs }, "LIVE: transaction sent via Helius Sender");
+
+      // Confirm with timeout
+      const confirmed = await confirmSignature(connection, sig, 45_000);
+      const confirmMs = Date.now() - sendStart;
+
+      if (!confirmed) {
+        log.warn({ sig, confirmMs }, "LIVE: transaction failed or timed out");
+        return;
+      }
+
+      // Reconcile actual PnL
+      const realizedPnlUsd = await getTransactionPnlUsd(
+        connection,
+        sig,
+        keypair.publicKey,
+        sim.opportunity.profitMint,
+        sim.solPriceUsd ?? 0,
+        9, // SOL decimals (profit mint is typically SOL or USDC)
+        sim.solPriceUsd ?? 0,
+      );
+
+      state.realizedProfit += usdcToBigInt(realizedPnlUsd ?? 0);
+
+      log.info(
+        {
+          sig,
+          sendMs,
+          confirmMs,
+          pipelineMs: sim.pipelineDurationMs,
+          netEstUsd: sim.netProfitUsd.toFixed(4),
+          realizedUsd: realizedPnlUsd?.toFixed(4) ?? "unknown",
+        },
+        "LIVE: trade completed",
+      );
+    } catch (error) {
+      log.error({ error: String(error).slice(0, 200) }, "LIVE: execution failed");
+    }
+  }
 }
 
 async function runScan(reason: string): Promise<void> {
@@ -242,7 +311,7 @@ function logStatus(): void {
 
 async function main() {
   log.info("═══════════════════════════════════════════════════════════════");
-  log.info("  Solana Arbitrage Bot — Simulation Mode");
+  log.info(`  Solana Arbitrage Bot — ${state.mode} Mode`);
   log.info("═══════════════════════════════════════════════════════════════");
   log.info(
     {
@@ -284,7 +353,7 @@ async function main() {
   // ── SOL reserve check ─────────────────────────────────────────────────
   const minReserveLamports = Math.round(env.MIN_SOL_RESERVE * 1e9);
   if (solBalance < minReserveLamports) {
-    if (env.MODE === "SIMULATE") {
+    if (state.mode === "SIMULATE") {
       log.warn(
         {
           balanceSol: (solBalance / 1e9).toFixed(4),
@@ -293,6 +362,7 @@ async function main() {
         "Wallet SOL below operational reserve — simulation will continue but trades would fail.",
       );
     } else {
+      // SHADOW and LIVE require sufficient SOL for fees
       log.fatal(
         {
           balanceSol: (solBalance / 1e9).toFixed(4),
@@ -314,6 +384,7 @@ async function main() {
         "WSOL ATA missing — simulation will continue without creating it",
       );
     } else {
+      // SHADOW and LIVE need the ATA for actual trading
       try {
         const ataIx = createAssociatedTokenAccountIdempotentInstruction(
           keypair.publicKey, wsolAta, keypair.publicKey, SOL_MINT,
