@@ -11,7 +11,7 @@ const BASE_URL = "https://api.jup.ag";
 
 // Separate rate limiters: Build API is latency-sensitive, Price API is cheap reads
 const buildLimiter = new RateLimiter(env.JUPITER_RATE_LIMIT_RPS);
-const priceLimiter = new RateLimiter(Math.max(env.JUPITER_RATE_LIMIT_RPS, 5));
+const priceLimiter = new RateLimiter(Math.min(env.JUPITER_RATE_LIMIT_RPS, 2));
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
