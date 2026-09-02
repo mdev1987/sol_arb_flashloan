@@ -54,20 +54,16 @@ export type VenueKey = keyof typeof VENUE_LABELS;
 export const CROSS_DEX_PAIRS: Array<[VenueKey, VenueKey]> = [
   ["raydiumClmm", "orcaWhirlpool"],
   ["orcaWhirlpool", "raydiumClmm"],
-  ["raydiumCpmm", "orcaWhirlpool"],
-  ["orcaWhirlpool", "raydiumCpmm"],
   ["raydiumClmm", "meteoraDlmm"],
   ["meteoraDlmm", "raydiumClmm"],
-  ["raydiumCpmm", "meteoraDlmm"],
-  ["meteoraDlmm", "raydiumCpmm"],
   ["orcaWhirlpool", "meteoraDlmm"],
   ["meteoraDlmm", "orcaWhirlpool"],
   ["raydiumClmm", "phoenix"],
   ["phoenix", "raydiumClmm"],
   ["orcaWhirlpool", "phoenix"],
   ["phoenix", "orcaWhirlpool"],
-  ["raydiumClmm", "openbook"],
-  ["openbook", "raydiumClmm"],
+  ["meteoraDlmm", "phoenix"],
+  ["phoenix", "meteoraDlmm"],
 ];
 
 // ── Base mint / quote mint defaults for configurable detection ────────────────

@@ -12,6 +12,6 @@ export const log = pino(
   },
   pino.multistream([
     { stream: process.stdout, level: "info" },
-    { stream: pino.destination("bot.log"), level: "info" },
+    { stream: pino.destination({ dest: "bot.log", sync: true }), level: "info" },
   ]),
 );

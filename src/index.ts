@@ -490,7 +490,7 @@ async function main() {
 
   // Heartbeat: write to bot.log every 30s even if scans are idle (keeps oxfile health check happy)
   const heartbeat = setInterval(() => {
-    log.debug({ uptime: ((Date.now() - state.startTime) / 1000 / 60).toFixed(1) + "m" }, "heartbeat");
+    log.info({ uptime: ((Date.now() - state.startTime) / 1000 / 60).toFixed(1) + "m" }, "heartbeat");
   }, 30_000);
 
   while (state.running) {

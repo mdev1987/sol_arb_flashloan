@@ -140,21 +140,37 @@ export async function getBuild(params: BuildParams): Promise<BuildResponse | nul
     if (params.destinationTokenAccount) url.searchParams.set("destinationTokenAccount", params.destinationTokenAccount);
     if (params.maxAccounts) url.searchParams.set("maxAccounts", String(params.maxAccounts));
 
-    try {
-      const res = await fetch(url, { headers: headers() });
-      if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        log.warn(
-          { status: res.status, body: body.slice(0, 300), inputMint: params.inputMint, outputMint: params.outputMint, amount: params.amount.toString(), dexes: params.dexes, mode: env.JUPITER_QUOTE_MODE },
-          "Jupiter /build error",
-        );
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const res = await fetch(url, { headers: headers() });
+        if (res.status === 429) {
+          const retryAfter = Number(res.headers.get("retry-after")) || 2;
+          if (attempt < MAX_RETRIES) {
+            log.warn({ retryAfter, attempt: attempt + 1 }, "Jupiter 429 rate limited — retrying");
+            await new Promise((r) => setTimeout(r, retryAfter * 1000));
+            continue;
+          }
+        }
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          log.warn(
+            { status: res.status, body: body.slice(0, 300), inputMint: params.inputMint, outputMint: params.outputMint, amount: params.amount.toString(), dexes: params.dexes, mode: env.JUPITER_QUOTE_MODE },
+            "Jupiter /build error",
+          );
+          return null;
+        }
+        return (await res.json()) as BuildResponse;
+      } catch (error) {
+        if (attempt < MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          continue;
+        }
+        log.warn({ error: String(error).slice(0, 100) }, "Jupiter /build fetch failed");
         return null;
       }
-      return (await res.json()) as BuildResponse;
-    } catch (error) {
-      log.warn({ error: String(error).slice(0, 100) }, "Jupiter /build fetch failed");
-      return null;
     }
+    return null;
   });
 }
 
