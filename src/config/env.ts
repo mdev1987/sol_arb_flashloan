@@ -6,7 +6,7 @@ const envSchema = z.object({
   JUPITER_API_KEY: z.string().min(1),
   PRIVATE_KEY: z.string().default(""),
 
-  MODE: z.enum(["SIMULATE", "SHADOW"]).default("SIMULATE"),
+  MODE: z.enum(["SIMULATE", "SHADOW", "LIVE"]).default("SIMULATE"),
   MAX_TRADE_USDC: z.coerce.number().positive().default(500),
   MIN_PROFIT_BPS: z.coerce.number().nonnegative().default(10),
   MIN_PROFIT_USDC: z.coerce.number().nonnegative().default(0.5),
