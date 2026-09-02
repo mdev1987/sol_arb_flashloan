@@ -66,6 +66,9 @@ export interface SimulationResult {
   finalTx?: VersionedTransaction;
   tipAccount?: import("@solana/web3.js").PublicKey;
   solPriceUsd?: number;
+  /** Profit token price and decimals for PnL reconciliation */
+  profitMintPriceUsd?: number;
+  profitMintDecimals?: number;
   /** Pipeline lifecycle timestamps */
   freshQuotedAt?: number;
   simulatedAt?: number;

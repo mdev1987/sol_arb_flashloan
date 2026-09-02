@@ -353,6 +353,8 @@ export async function simulateOpportunity(opp: ArbOpportunity): Promise<Simulati
       finalTx,
       tipAccount,
       solPriceUsd,
+      profitMintPriceUsd: profitMint.price,
+      profitMintDecimals: profitMint.decimals,
       freshQuotedAt,
       simulatedAt,
       pipelineDurationMs: simulatedAt - pipelineStart,

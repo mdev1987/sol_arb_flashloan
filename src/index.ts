@@ -149,12 +149,10 @@ async function handleOpportunity(opp: ArbOpportunity): Promise<void> {
     return;
   }
 
-  state.totalTrades++;
-  state.simulatedProfit += usdcToBigInt(sim.netProfitUsd);
-  state.expectedProfit += usdcToBigInt(sim.netProfitUsd);
-
   // Mode dispatch
   if (state.mode === "SIMULATE") {
+    state.simulatedProfit += usdcToBigInt(sim.netProfitUsd);
+
     log.info(
       {
         netUsd: sim.netProfitUsd.toFixed(4),
@@ -168,6 +166,8 @@ async function handleOpportunity(opp: ArbOpportunity): Promise<void> {
   }
 
   if (state.mode === "SHADOW") {
+    state.simulatedProfit += usdcToBigInt(sim.netProfitUsd);
+
     log.info(
       {
         netUsd: sim.netProfitUsd.toFixed(4),
@@ -208,6 +208,18 @@ async function handleOpportunity(opp: ArbOpportunity): Promise<void> {
       return;
     }
 
+    // Pre-send safeguard: fresh quote age at submission
+    // The fresh quote should be very recent — if more than 1.5s elapsed since
+    // the fresh quote, market may have moved and the simulation is no longer valid.
+    const maxFreshAgeMs = 1_500;
+    if (sim.freshQuotedAt && Date.now() - sim.freshQuotedAt > maxFreshAgeMs) {
+      log.warn(
+        { freshAgeMs: Date.now() - sim.freshQuotedAt, maxMs: maxFreshAgeMs },
+        "LIVE: fresh quote too old at submission — skipping",
+      );
+      return;
+    }
+
     try {
       const sendStart = Date.now();
       const sig = await sendViaSender(sim.finalTx);
@@ -224,18 +236,21 @@ async function handleOpportunity(opp: ArbOpportunity): Promise<void> {
         return;
       }
 
-      // Reconcile actual PnL
+      // Reconcile actual PnL using correct profit token price and decimals
       const realizedPnlUsd = await getTransactionPnlUsd(
         connection,
         sig,
         keypair.publicKey,
         sim.opportunity.profitMint,
-        sim.solPriceUsd ?? 0,
-        9, // SOL decimals (profit mint is typically SOL or USDC)
+        sim.profitMintPriceUsd ?? 0,
+        sim.profitMintDecimals ?? 6,
         sim.solPriceUsd ?? 0,
       );
 
+      // Only count as a real trade AFTER confirmation
+      state.totalTrades++;
       state.realizedProfit += usdcToBigInt(realizedPnlUsd ?? 0);
+      state.expectedProfit += usdcToBigInt(sim.netProfitUsd);
 
       log.info(
         {
